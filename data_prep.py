@@ -1,89 +1,177 @@
 """
 data_prep.py
-------------------
-Download the TinyStories dataset, 
-tokenize with BPE tokenizer.
+----------------------------------
+Downloads the TinyStories dataset, trains a small byte-level BPE tokenizer on it,
+tokenizes corpus, streams token ids to disk as uint16 binary files ready for
+next-token-prediction training.
 
-Write token stream to disk as flat uint16 binary 
-files (train.bin / val.bin) using np.memmap.
+Run once:
+   pip install datasets tokenizers numpy torch
+   python data_prep.py
 
-Run once for preprocessing:
-    python data_prep.py
+Outputs (in ./data/tinystories/):
+   tokenizer.json | the trained BPE tokenizer (load using Tokenizer.from_file)
+   train.bin      | training token ids, flat uint16 array
+   val.bin        | validation token ids, flat uint16 array
+   meta.pkl       | vocab_size, eot_id, token_counts
 
-Downstream (train.py) reads the .bin files directly off disk,
-This prevents the full corpus from sitting in RAM.
-
+Import get_batch() in training script later to pull (x, y) minibatches.
 """
 
 import os
+import pickle
+from pathlib import Path
+
 import numpy as np
-import tiktoken
-from tqdm import tqdm
-from datasets import load_dataset
+import torch
+from datasets import load_dataset 
+from tokenizers import Tokenizer, models, trainers, pre_tokenizers, decoders
 
-#---------------------------------
-# config
-#---------------------------------
-DATA_DIR = 'data'
-DATASET_NAME = 'roneneldan/TinyStories'
-NUM_PROC = 6 # number of processes for tokenization
-NUM_PROC_LOAD = 6 # processes for intial download/prep
-SHARDS = 1024 # how many chunks to stream to disk
+# --------------------------
+# CONFIG 
+# --------------------------
+DATA_DIR = Path("data/tinystories")
+DATASET_NAME = "roneneldan/TinyStories"
 
-# GPT-2 BPE. 
-enc = tiktoken.get_encoding('gpt2')
+VOCAB_SIZE = 8192 # small vocab size for a smaller embedding table
+DTYPE = np.uint16 # vocab < 65536 fits in uint16
+EOT_TOKEN = "<|endoftext|>"
 
-def process(story):
-    """
-    Tokenize one story and append end-of-text token as seperator.
+TOKENIZER_TRAIN_SAMPLE = 200_000 # stories to learn the merges 
+MAX_TRAIN_STORIES = None # how many stories to train on, change for faster iteration
+ENCODE_BATCH = 1000
 
-    """
-    ids = enc.encode_ordinary(story['text']) # ignores special characters
-    ids.append(enc.eot_token) # appends end-of-text token to mark story boundary
-    return {'ids': ids, 'len': len(ids)}
+# ---------------------------
+# DATASET
+# ---------------------------
+def load_splits():
+    ds = load_dataset(DATASET_NAME)
+    train, val = ds['train'], ds['validation']
+    if MAX_TRAIN_STORIES is not None:
+        train = train.select(range(min(MAX_TRAIN_STORIES, len(train))))
+    print(f"train stories: {len(train):,} val stories: {len(val):,}")
+    return train, val
 
-def main():
-    os.makedirs(DATA_DIR, exist_ok=True)
+# --------------------------------
+# BUILD TOKENIZER
+# --------------------------------
+def build_tokenizer(train_ds):
+    tok_path = DATA_DIR / "tokenizer.json"
+    if tok_path.exists():
+        print(f"loading existing tokenizer from {tok_path}")
+        return Tokenizer.from_file(str(tok_path))
 
-    dataset = load_dataset(DATASET_NAME, num_proc=NUM_PROC_LOAD)
+    tokenizer = Tokenizer(models.BPE())
+    tokenizer.pre_tokenizer = pre_tokenizers.ByteLevel(add_prefix_space=False)
+    tokenizer.decoder = decoders.ByteLevel()
 
-    tokenized = dataset.map(
-        process,
-        remove_columns=['text'],
-        desc='tokenizing the splits',
-        num_proc=NUM_PROC
+    trainer = trainers.BpeTrainer(
+        vocab_size=VOCAB_SIZE,
+        special_tokens=[EOT_TOKEN],
+        initial_alphabet=pre_tokenizers.ByteLevel.alphabet(),
+        show_progress=True
     )
 
-    # write each split to its own flat binary file
-    for split, dset in tokenized.items():
-        filename = 'val.bin' if split == 'validation' else f'{split}.bin'
-        path = os.path.join(DATA_DIR, filename)
+    n = min(TOKENIZER_TRAIN_SAMPLE, len(train_ds))
+    print(f"training tokenizer on {n:,} stories...")
 
-        # preallocate memmap to right length
-        arr_len = np.sum(dset['len'], dtype=np.uint64)
-        arr = np.memmap(path, dtype=np.uint16, mode='w+', shape=(int(arr_len)))
+    def text_iter():
+        for i in range(n):
+            yield train_ds[i]["text"]
 
-        # stream tokens to disk in shards
-        idx = 0
-        for batch_idx in tqdm(range(SHARDS), desc=f"writing {path}"):
-            batch = dset.shard(
-                num_shards=SHARDS, index=batch_idx, contiguous=True
-            ).with_format('numpy')
-            arr_batch = np.concatenate(batch['ids'])
-            arr[idx : idx + len(arr_batch)] = arr_batch
-            idx += len(arr_batch)
-        arr.flush()
+    tokenizer.train_from_iterator(text_iter(), trainer=trainer, length=n)
+    tokenizer.save(str(tok_path))
+    print(f"tokenizer saved to {tok_path} (vocab={tokenizer.get_vocab_size()})")
+    return tokenizer
 
-        print(f"{path}: {arr_len:,} tokens")
+# --------------------------------------------------
+# TOKENIZE A SPLIT AND STREAM TO FLAT .BIN FILE
+# --------------------------------------------------
+def encode_split(ds, tokenizer, out_path, eot_id):
+    """
+    Encode all stories, append EOT after each, write ids as uint16 to disk.
 
-def test_print(s: str) -> str:
-    print(s)
+    Writing incrementally keeps only ENCODE_BATCH stories in memory at one time.
+    This allows smooth tokenization on personal laptop for larger dataset.
+    """
+    n = len(ds)
+    total = 0
+    with open(out_path, 'wb') as f:
+        for start in range(0, n, ENCODE_BATCH):
+            texts = ds[start:start + ENCODE_BATCH]["text"]
+            encodings = tokenizer.encode_batch(texts)
+            ids = []
+            for enc in encodings:
+                ids.extend(enc.ids)
+                ids.append(eot_id)
+            np.array(ids, dtype=DTYPE).tofile(f)
+            total += len(ids)
+            if start % (ENCODE_BATCH * 50) == 0:
+                print(f"  {out_path.name}: {start:,}/{n:,} stories"
+                      f"({total:,} tokens)")
+    print(f"{out_path.name}: {total:,} tokens written")
+    return total
+
+# -------------------------------------------------
+# BATCH LOADER 
+# -------------------------------------------------
+def get_batch(split, block_size, batch_size, device='cpu'):
+    """
+    Return (x,y) for next-token prediction.
+
+    x, y are LongTensors of shape (batch_size, block_size): y is x shifted by one.
+    The memmap is re-opened each call on purpose to avoid a slow memory leak
+
+    """
+    path = DATA_DIR / ('train.bin' if split == 'train' else 'val.bin')
+    data = np.memmap(path, dtype=DTYPE, mode='r')
+    ix = torch.randint(len(data) - block_size, (batch_size,))
+    x = torch.stack([torch.from_numpy(data[i:i + block_size].astype(np.int64)) for i in ix])
+    y = torch.stack([torch.from_numpy(data[i + 1:i + 1 + block_size].astype(np.int64)) for i in ix])
+    if device.startswith("cuda"):
+        x = x.pin_memory().to(device, non_blocking=True)
+        y = y.pin_memory().to(device, non_blocking=True)
+    else:
+        x, y = x.to(device), y.to(device)
+    return x, y
+
+# ------------------------------------------------------------------
+# PUTTING EVERYTHING TOGETHER 
+# ------------------------------------------------------------------
+def main():
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+    train_ds, val_ds = load_splits()
+    tokenizer = build_tokenizer(train_ds)
+    eot_id = tokenizer.token_to_id(EOT_TOKEN)
+
+    train_tokens = encode_split(train_ds, tokenizer, DATA_DIR / "train.bin", eot_id)
+    val_tokens = encode_split(val_ds, tokenizer, DATA_DIR / "val.bin", eot_id)
+
+    meta = {
+        "vocab_size": tokenizer.get_vocab_size(),
+        "eot_id": eot_id,
+        "train_tokens": val_tokens,
+        "val_tokens": val_tokens,
+        "tokenizer_path": str(DATA_DIR / "tokenizer.json")
+    }
+
+    with open(DATA_DIR / "meta.pkl", 'wb') as f:
+        pickle.dump(meta, f)
+    print(f'\nmeta: {meta}')
+
+    # sanity check - pull single batch and round-trip a sequence through tokenizer
+    x, y = get_batch('val', block_size=64, batch_size=4, device='cpu')
+    print(f"\nsample batch x={tuple(x.shape)} y={tuple(y.shape)} dtype={x.dtype}")
+    print(f"decoded x[0]:")
+    print(f"   {tokenizer.decode(x[0].tolist())}")
+
 
 if __name__ == '__main__':
-    test_print('Hello World')
+    main()
 
-                              
-        
+
+
 
 
 
