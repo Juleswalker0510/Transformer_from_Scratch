@@ -36,6 +36,14 @@ class Config:
 
 
 class PositionalEncoding(nn.Module):
+    """
+    Fixed sinusoidal positional encoding (not learned) as used by the 2017 paper 
+    "Attention is all you need". 
+
+    Precomputes a (block_size, n_embd) table of sine/cosine values at 
+    geometrically spaced frequencies and adds it to each token embedding,
+    giving each position a unique, order-aware signal.
+    """
     def __init__(self, n_embd: int, block_size: int, dropout: float=0.0):
         super().__init__()
         self.dropout = nn.Dropout(dropout)
@@ -56,6 +64,16 @@ class PositionalEncoding(nn.Module):
 
 
 class MultiHeadAttention(nn.Module):
+    """
+    Masked multi-head self-attention.
+
+    Projects the input into query/key/value, splits them across n_head heads,
+    computes scaled dot-product attention with lower-triangular mask ensuring
+    each position attends only itself and earlier ones, recombines heads and
+    projects back to n_embd.
+
+    Input and Output are both (B, T, n_embd)
+    """
     def __init__(self, config: Config):
         super().__init__()
         assert config.n_embd % config.n_head == 0, \
@@ -96,6 +114,11 @@ class MultiHeadAttention(nn.Module):
 
 
 class PosWiseFeedForward(nn.Module):
+    """
+    Position-wise feed-forward layer.
+
+    Two-layer MLP (n_embd -> 4*n_embd -> n_embd) with GELU activation function.
+    """
     def __init__(self, config: Config):
         super().__init__()
         self.net = nn.Sequential(
@@ -109,6 +132,12 @@ class PosWiseFeedForward(nn.Module):
 
 
 class Block(nn.Module):
+    """
+    Single pre-norm transformer block.
+
+    Applies LayerNorm then masked self-attention, and LayerNorm 
+    then the feed-forward network, each wrapped in a residual connection.
+    """
     def __init__(self, config: Config):
         super().__init__()
         self.ln1 = nn.LayerNorm(config.n_embd)
@@ -122,6 +151,16 @@ class Block(nn.Module):
 
 
 class Transformer(nn.Module):
+    """
+    Decoder-only (GPT-style) transformer language model.
+
+    Embeds token IDs, adds positional encoding, runs the sequence through
+    a stack of n_layer blocks, applies final LayerNorm, projects to per-position
+    vocab logits.
+
+    forward() optionally returns next-token cross-entropy loss.
+    generate() samples autogregressively.
+    """
     def __init__(self, config: Config):
         super().__init__()
         self.config = config
@@ -146,7 +185,7 @@ class Transformer(nn.Module):
     def forward(self, idx, targets=None):
         B, T = idx.shape
         assert T <= self.config.block_size, \
-        f"sequence length {T} excceds block_size {self.config.block_size}"
+        f"sequence length {T} exceeds block_size {self.config.block_size}"
 
         x = self.token_embedding(idx) # (B, T, C)
         x = self.pos_encoding(x) # add position information
