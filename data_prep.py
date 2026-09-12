@@ -151,7 +151,7 @@ def main():
     meta = {
         "vocab_size": tokenizer.get_vocab_size(),
         "eot_id": eot_id,
-        "train_tokens": val_tokens,
+        "train_tokens": train_tokens,
         "val_tokens": val_tokens,
         "tokenizer_path": str(DATA_DIR / "tokenizer.json")
     }
