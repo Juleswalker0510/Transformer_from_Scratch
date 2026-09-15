@@ -57,9 +57,31 @@ flowchart TD
 ## Model configuration
 Architecture is defined by the Config dataclass. 
 
+| Field | Meaning | Example |
+| -- | -- | -- |
+| `vocab_size` | Size of token vocabulary | Taken from meta with meta['vocab_size'] |
+| `block_size` | Maximum context length | 256 |
+| `n_embd` | Residual-stream width | 384 |
+| `n_head` | Number of attention heads | 6 |
+| `n_layer` | Number of transformer blocks | 6 |
+| `dropout` | Dropout probability | 0.1 |
+
+## Installation
 
 
+## Usage
 
+
+## Implementation notes
+Some design choices
+- **Pre-norm blocks**. LayerNorm is applied before each sub-layer, with a residual add outside the norm. This leaves a clean unnormalized gradient from input to output and trains stably at depth. This is the current standard in contrast to post-norm used in the original 2017 paper.
+- **Causal masking**. A lower triangular mask blocks each position from attending to future tokens. This makes the model autoregressive and lets all positions be trained as independent next-token predictions in one forward pass.
+- **Scaled dot-product attention**. Attention scores are divided by `sqrt(head_dim)` to keep the softmax out of its saturated, low-gradient regime.
+- **Weight initialization**. Linear and embedding weights are drawn from `N(0, 0.02)` with zero biases, following GPT-2 convention.
+
+## Potential next steps and extensions
+
+## Results 
 
 
 
