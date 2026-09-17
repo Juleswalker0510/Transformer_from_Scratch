@@ -13,6 +13,7 @@ run: python train.py
 # imports
 import pickle
 from contextlib import nullcontext
+import matplotlib.pyplot as plt
 
 import torch
 from tokenizers import Tokenizer
@@ -25,8 +26,8 @@ from data_prep import get_batch, DATA_DIR
 # ------------------------------------------
 block_size    = 256   # MUST match what is passed to get_batch
 batch_size    = 32    
-max_iters     = 5000  # total training steps
-eval_interval = 500   # evaluate + print every this many steps
+max_iters     = 7500  # total training steps
+eval_interval = 250   # evaluate + print every this many steps
 eval_iters    = 50    # batches averaged per evaluation
 learning_rate = 3e-4
 
@@ -78,9 +79,11 @@ def estimate_loss():
 # -----------------------------------------
 # training loop
 # -----------------------------------------
+history = [] # store losses
 for it in range(max_iters + 1):
     if it % eval_interval == 0:
         losses = estimate_loss()
+        history.append((it, losses['train'], losses['val']))
         print(f"iter {it}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
 
     X, Y = get_batch('train', block_size, batch_size, device)
@@ -91,11 +94,19 @@ for it in range(max_iters + 1):
     optimizer.step()
 
 # --------------------------------------------
-# save + sample
+# save + sample + loss plot 
 # --------------------------------------------
+its, tr, va = zip(*history[1:]) # skip it=0 baseline
+plt.plot(its, tr, label='train')
+plt.plot(its, va, label='val')
+plt.xlabel('iteration')
+plt.ylabel('cross-entropy loss')
+plt.legend()
+plt.title('Training loss')
+plt.savefig('assets/loss.png', dpi=150, bbox_inches='tight')
+
 torch.save({"model": model.state_dict(), "config": config.__dict__, "meta": meta}, "ckpt.pt")
 print('saved checkpoint -> ckpt.pt')
-
 tok = Tokenizer.from_file(meta['tokenizer_path'])
 context = torch.tensor([tok.encode('Once upon a time').ids], dtype=torch.long, device=device)
 sample = model.generate(context, max_new_tokens=200, temperature=0.8, top_k=200)
