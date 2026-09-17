@@ -159,6 +159,8 @@ Prompt: _"Once upon a time"_ (temperature = 0.8, top_k = 200):
 >
 >Later that night, Lily's mommy asked her if she needed a treat. Lily said yes and said, "I like  cookies. It's yummy!" Her mommy said, "I am a good helper, Lily." They eat some cookies together  and sat down to eat. The next day, Lily's mommy gave her a big kiss and said, "Thank you for      helping me." Lily felt happy and went to bed feeling happy.
 
+Notes:
+- The model produces fluent, grammatical stories with occasional lapses in logical consistency, but consistent with its size.
 
 ## Implementation notes
 Some design choices
