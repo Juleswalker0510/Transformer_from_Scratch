@@ -3,7 +3,6 @@ Building a minimal **decoder-only transformer** using PyTorch, a ground up imple
 
 Default configuration is a ~16.95M parameter model that learns to generate short, coherent children's stories.
 
-
 ## Highlights
 - Pure PyTorch, no high-level transformer abstractions.
 - Explicit attention math, causal masking, and residual wiring.
@@ -130,11 +129,35 @@ To generate from your own code:
 | Learning rate | 3e-4 |
 | Batch size | 32 |
 | Context length | 256 |
-| Iterations | 5000 |
+| Iterations | 7500 |
 | Precision | fp32, with bf16 autocast on CUDA |
 | Eval | mean loss over 50 batches every 500 steps |
 
 ## Results
+
+Trained for 7,500 iterations on TinyStories. Final metrics:
+
+| Metric | Value |
+| ------ | ----- |
+| Parameters | 16.95M |
+| Train loss | 2.07 |
+| Val loss | 2.10 |
+| Val perplexity | 8.17 |
+| Hardware | single NVIDIA GeForce RTX 4060 (8 GB) |
+| Training time | ~15mins |
+
+### Loss curve
+![Training and Validation loss](assets/loss.png)
+
+
+### Sample output
+Prompt: _"Once upon a time"_ (temperature = 0.8, top_k = 200):
+
+> Once upon a time, there was a little girl named Lily. She loved to play with her toys and sing    songs. One day, her mommy said it was time to be dinner. Lily was very excited!
+>
+>Lily's mommy said it was time for bed. Lily was sad because she didn't want to eat dinner. She  asked her mommy if she could help her. Her mommy said yes, but Lily remembered to be more careful  when dinner.
+>
+>Later that night, Lily's mommy asked her if she needed a treat. Lily said yes and said, "I like  cookies. It's yummy!" Her mommy said, "I am a good helper, Lily." They eat some cookies together  and sat down to eat. The next day, Lily's mommy gave her a big kiss and said, "Thank you for      helping me." Lily felt happy and went to bed feeling happy.
 
 
 ## Implementation notes
